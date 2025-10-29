@@ -15,7 +15,8 @@ struct DirectionMapView: View {
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     
     @State private var destinationCoordinate: CLLocationCoordinate2D?
-    @State private var route:MKRoute?
+    @State private var primaryRoute: MKRoute? // For the best route
+    @State private var alternativeRoutes: [MKRoute] = []
     @State private var destinationSelected: Bool = false
     @State private var showRouteErrorToast = false
     
@@ -40,9 +41,26 @@ struct DirectionMapView: View {
                     
                     
                 }
-                if let route = route {
+                ForEach(alternativeRoutes, id: \.self) { route in
                     MapPolyline(route)
-                        .stroke(Color.yellow, lineWidth: 4)
+                        .stroke(Color.yellow.opacity(0.45), lineWidth: 5)
+                    if let midPoint = getMidPoint(for: route){
+                        Annotation("",coordinate: midPoint){
+                            RouteTimeAnnotation(time: format(timeInterval: route.expectedTravelTime), isPrimary: false)
+                        }
+                    }
+                }
+                
+                
+                if let route = primaryRoute {
+                    MapPolyline(route)
+                        .stroke(Color.blue, lineWidth: 5)
+                    if let midPoint = getMidPoint(for: route){
+                        Annotation("",coordinate: midPoint){
+                            RouteTimeAnnotation(time: format(timeInterval: route.expectedTravelTime), isPrimary: true)
+                        }
+                    }
+                    
                 }
                 
             }
@@ -85,7 +103,7 @@ struct DirectionMapView: View {
                             }
                     }
                 }
-                .animation(.easeInOut, value: showRouteErrorToast)
+                    .animation(.easeInOut, value: showRouteErrorToast)
                 , alignment: .bottom
             )
         }
@@ -102,25 +120,80 @@ struct DirectionMapView: View {
     }
     func getDirection(coordinate: CLLocationCoordinate2D) {
         Task {
-            guard let userLocation = try? await getUsuerLocation() else { return }
+            guard let userLocation = try? await getUsuerLocation() else {
+                showRouteErrorToast = true
+                return
+            }
+            
             let request = MKDirections.Request()
             request.source = MKMapItem(placemark: MKPlacemark(coordinate: userLocation))
             request.destination = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
-            request.transportType = .walking
+            request.transportType = .automobile
+            request.requestsAlternateRoutes = true
+            
             do {
                 let direction = try await MKDirections(request: request).calculate()
-                route = direction.routes.first
-                if route == nil {
+                print("routes count:\(direction.routes.count)")
+                if let firstRoute = direction.routes.first {
+                    primaryRoute = firstRoute
+                    alternativeRoutes = Array(direction.routes.dropFirst())
+                    showRouteErrorToast = false
+                } else {
+                    primaryRoute = nil
+                    alternativeRoutes = []
                     showRouteErrorToast = true
                 }
             } catch {
-                route = nil
+                primaryRoute = nil
+                alternativeRoutes = []
                 showRouteErrorToast = true
             }
         }
     }
+    func getMidPoint(for route: MKRoute) -> CLLocationCoordinate2D? {
+        guard route.polyline.pointCount > 0 else {
+            return nil
+        }
+        
+        let point = route.polyline.points()
+        let midIndex = route.polyline.pointCount / 2
+        let mappedPoint = point[midIndex]
+        return mappedPoint.coordinate
+        
+    }
+    func format(timeInterval: TimeInterval) -> String {
+            let formatter = DateComponentsFormatter()
+            formatter.unitsStyle = .abbreviated
+            formatter.allowedUnits = [.hour, .minute]
+            
+            if timeInterval < 60 {
+                 return "0m"
+            }
+            
+            return formatter.string(from: timeInterval) ?? ""
+        }
 }
 
 #Preview {
     DirectionMapView()
+}
+
+struct RouteTimeAnnotation:View {
+    var time:String
+    var isPrimary:Bool
+    var body: some View {
+        Text(time)
+            .font(.caption)
+            .bold()
+            .padding(isPrimary ? 7:6)
+            .foregroundStyle(isPrimary ? Color.white:Color.yellow.opacity(0.8))
+            .background(isPrimary ? Color.blue:Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .shadow(radius: isPrimary ? 3:1)
+            .overlay{
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(isPrimary ? Color.clear : Color.yellow.opacity(0.8), lineWidth: 1)
+            }
+        
+    }
 }
