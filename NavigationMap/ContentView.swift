@@ -5,7 +5,7 @@
 //  Created by BizMagnets on 27/10/25.
 //
 
-import SwiftUICore
+import SwiftUI
 import SwiftUI
 
 
