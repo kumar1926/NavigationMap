@@ -8,6 +8,7 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import GoogleMaps
 
 struct FavoritesView: View {
     let manager = CLLocationManager()
