@@ -22,7 +22,7 @@ struct DirectionMapView: View {
     @State private var showRouteErrorToast = false
     
     @State private var showNavigationSteps: Bool = false
-    
+    @State private var userHeading: CLLocationDirection? = nil
     @State private var isNavigating: Bool = false
     @State private var currentStepIndex: Int = 0
     @State private var currentUserLocation: CLLocationCoordinate2D?
@@ -34,7 +34,11 @@ struct DirectionMapView: View {
             MapReader { proxy in
                 Map(position: $cameraPosition) {
                     
-                    UserAnnotation()
+                    if let userLocation = currentUserLocation {
+                        Annotation("Me", coordinate: userLocation) {
+                            NavigatingUserAnnotation(isNavigating: isNavigating, heading: userHeading)
+                        }
+                    }
                     
                     if let coordinate = destinationCoordinate {
 
@@ -124,13 +128,15 @@ struct DirectionMapView: View {
                 .onAppear {
                     manager.requestWhenInUseAuthorization()
                     manager.startUpdatingLocation()
-                    
-                    // NEW: Set up location tracking
+
                     locationDelegate.onLocationUpdate = { location in
                         currentUserLocation = location.coordinate
                         if isNavigating {
                             updateNavigationStep(userLocation: location.coordinate)
                         }
+                    }
+                    locationDelegate.onHeadingUpdate = { heading in
+                        userHeading = heading
                     }
                 }
                 .mapStyle(.hybrid(elevation: .realistic))
@@ -201,13 +207,6 @@ struct DirectionMapView: View {
             generator.impactOccurred()
         }
     }
-
-    
-    func format(distance: CLLocationDistance) -> String {
-        let formatter = MKDistanceFormatter()
-        formatter.unitStyle = .abbreviated
-        return formatter.string(fromDistance: distance)
-    }
     
     func getUsuerLocation() async -> CLLocationCoordinate2D?{
         let updates = CLLocationUpdate.liveUpdates()
@@ -253,28 +252,7 @@ struct DirectionMapView: View {
         }
     }
     
-    func getMidPoint(for route: MKRoute) -> CLLocationCoordinate2D? {
-        guard route.polyline.pointCount > 0 else {
-            return nil
-        }
-        
-        let point = route.polyline.points()
-        let midIndex = route.polyline.pointCount / 2
-        let mappedPoint = point[midIndex]
-        return mappedPoint.coordinate
-    }
-    
-    func format(timeInterval: TimeInterval) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.unitsStyle = .abbreviated
-        formatter.allowedUnits = [.hour, .minute]
-        
-        if timeInterval < 60 {
-            return "0m"
-        }
-        
-        return formatter.string(from: timeInterval) ?? ""
-    }
+  
     
     func getPlacemarkName(for coordinate: CLLocationCoordinate2D) async {
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
@@ -365,36 +343,33 @@ struct DirectionMapView: View {
         }
     }
     
-    func getStepEndCoordinate(step: MKRoute.Step) -> CLLocationCoordinate2D {
-        let polyline = step.polyline
-        guard polyline.pointCount > 0 else {
-            return CLLocationCoordinate2D()
-        }
-        
-        let points = polyline.points()
-        let lastPoint = points[polyline.pointCount - 1]
-        return lastPoint.coordinate
-    }
+    
 }
 
 class LocationUpdateDelegate: NSObject, ObservableObject, CLLocationManagerDelegate {
     var onLocationUpdate: ((CLLocation) -> Void)?
+    var onHeadingUpdate: ((CLLocationDirection) -> Void)?    // Add this line
+
     private let locationManager = CLLocationManager()
-    
+
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.requestWhenInUseAuthorization()
         locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()    // Start heading updates!
     }
-    
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         onLocationUpdate?(location)
     }
-}
 
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        onHeadingUpdate?(newHeading.trueHeading)  // Pass true heading in degrees
+    }
+}
 struct NavigationInstructionView: View {
     let step: MKRoute.Step
     let userLocation: CLLocationCoordinate2D?
@@ -493,113 +468,47 @@ struct NavigationInstructionView: View {
     }
 }
 
-struct NavigationStepsView: View {
-    let route: MKRoute?
-    let destinationName: String
-    let onStartNavigation: () -> Void
-    
-    var body: some View {
-        NavigationView {
-            List {
-                Section {
-                    Button(action: onStartNavigation) {
-                        HStack {
-                            Spacer()
-                            Label("Start Navigation", systemImage: "location.fill")
-                                .font(.headline)
-                            Spacer()
-                        }
-                    }
-                    .listRowBackground(Color.blue)
-                    .foregroundColor(.white)
-                }
-                
-                Section(header: Text("Route Summary")) {
-                    HStack {
-                        Image(systemName: "clock")
-                        Text("Time: \(DirectionMapView().format(timeInterval: route?.expectedTravelTime ?? 0))")
-                    }
-                    HStack {
-                        Image(systemName: "ruler")
-                        Text("Distance: \(DirectionMapView().format(distance: route?.distance ?? 0))")
-                    }
-                    HStack {
-                        Image(systemName: "mappin.and.ellipse")
-                        Text("Destination: **\(destinationName)**")
-                    }
-                }
-
-                if let steps = route?.steps, steps.count > 0 {
-                    Section(header: Text("Turn-by-Turn Directions")) {
-                        ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                            if !step.instructions.isEmpty {
-                                HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: getManeuverIcon(for: step))
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(width: 30, height: 30)
-                                        .foregroundColor(.blue)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(step.instructions)
-                                            .font(.body)
-                                        Text(DirectionMapView().format(distance: step.distance))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-                } else {
-                    Text("No detailed steps available for this route.")
-                }
-            }
-            .navigationTitle("Directions")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-    
-    private func getManeuverIcon(for step: MKRoute.Step) -> String {
-        let instruction = step.instructions.lowercased()
-        
-        if instruction.contains("turn right") || instruction.contains("right onto") {
-            return "arrow.turn.up.right"
-        } else if instruction.contains("turn left") || instruction.contains("left onto") {
-            return "arrow.turn.up.left"
-        } else if instruction.contains("slight right") {
-            return "arrow.up.right"
-        } else if instruction.contains("slight left") {
-            return "arrow.up.left"
-        } else if instruction.contains("arrive") || instruction.contains("destination") {
-            return "mappin.circle.fill"
-        } else {
-            return "arrow.up"
-        }
-    }
-}
-
 #Preview {
     DirectionMapView()
 }
 
-struct RouteTimeAnnotation:View {
-    var time:String
-    var isPrimary:Bool
-    var body: some View {
-        Text(time)
-            .font(.caption)
-            .bold()
-            .padding(isPrimary ? 7:6)
-            .foregroundStyle(isPrimary ? Color.white:Color.yellow.opacity(0.8))
-            .background(isPrimary ? Color.blue:Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .shadow(radius: isPrimary ? 3:1)
-            .overlay{
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(isPrimary ? Color.clear : Color.yellow.opacity(0.8), lineWidth: 1)
-            }
+
+extension View{
+    func getMidPoint(for route: MKRoute) -> CLLocationCoordinate2D? {
+        guard route.polyline.pointCount > 0 else {
+            return nil
+        }
         
+        let point = route.polyline.points()
+        let midIndex = route.polyline.pointCount / 2
+        let mappedPoint = point[midIndex]
+        return mappedPoint.coordinate
+    }
+    
+    func format(timeInterval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = [.hour, .minute]
+        
+        if timeInterval < 60 {
+            return "0m"
+        }
+        
+        return formatter.string(from: timeInterval) ?? ""
+    }
+    func getStepEndCoordinate(step: MKRoute.Step) -> CLLocationCoordinate2D {
+        let polyline = step.polyline
+        guard polyline.pointCount > 0 else {
+            return CLLocationCoordinate2D()
+        }
+        
+        let points = polyline.points()
+        let lastPoint = points[polyline.pointCount - 1]
+        return lastPoint.coordinate
+    }
+    func format(distance: CLLocationDistance) -> String {
+        let formatter = MKDistanceFormatter()
+        formatter.unitStyle = .abbreviated
+        return formatter.string(fromDistance: distance)
     }
 }

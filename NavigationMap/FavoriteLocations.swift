@@ -9,6 +9,7 @@ import Foundation
 
 class FavoriteLocations: ObservableObject {
     @Published var locations: [Location] = []
+    
 }
 struct Location: Identifiable {
     var id: UUID = UUID()
